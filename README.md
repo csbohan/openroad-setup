@@ -5,7 +5,7 @@ A comprehensive setup script to install OpenROAD, OpenRAM, and OpenROAD-flow-scr
 ## 🚀 Quick Start
 
 ```bash
-git clone https://github.com/yourusername/openroad-setup
+git clone https://github.com/csbohan/openroad-setup.git
 cd openroad-setup
 chmod +x setup_openroad.sh
 ./setup_openroad.sh
@@ -33,16 +33,9 @@ chmod +x setup_openroad.sh
 
 ## 🛠️ Installation
 
-### Method 1: Direct Download and Run
+### Method 1: Clone Repository
 ```bash
-wget https://raw.githubusercontent.com/yourusername/openroad-setup/main/setup_openroad.sh
-chmod +x setup_openroad.sh
-./setup_openroad.sh
-```
-
-### Method 2: Clone Repository
-```bash
-git clone https://github.com/yourusername/openroad-setup.git
+git clone https://github.com/csbohan/openroad-setup.gitt
 cd openroad-setup
 chmod +x setup_openroad.sh
 ./setup_openroad.sh
