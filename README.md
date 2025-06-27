@@ -94,6 +94,7 @@ make DESIGN_CONFIG=./designs/sky130hd/gcd/config.mk <-- Many designs given in fl
 ```
 
 ### Test OpenRAM
+FIRST TEST MAY BE 25+ min
 ```bash
 cd ~/openroad-setup/OpenRAM
 python3 openram.py SRAM_32x128_1rw.py <-- Your Design (Example given below) 
