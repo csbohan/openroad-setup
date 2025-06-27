@@ -99,7 +99,7 @@ cd ~/openroad-setup/OpenRAM
 python3 openram.py SRAM_32x128_1rw.py <-- Your Design (Example given below) 
 ```
 Example design SRAM_32x128_1rw.py 
-Add this to your OpenRAM Directory with code below 
+'Add this to your OpenRAM Directory with code below' 
 ```
 cat > SRAM_32x128_1rw.py << EOF
 num_rw_ports    = 1
