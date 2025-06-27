@@ -69,13 +69,14 @@ BUILD_THREADS=4 ./setup_openroad.sh
 
 After installation, tools are organized as follows:
 ~/openroad-setup/
-├── 'OpenROAD/' # OpenROAD installation
-├── 'OpenRAM/' # OpenRAM installation
-├── 'openroad-flow-scripts/' # Flow scripts and examples
-├── 'run_openram.sh' # Run a openRAM test 
-├── 'setup_enviroment.sh' # Enviroment setup script for OpenROAD + OpenRAM
-└── 'README.md' 
-
+'''
+├── OpenROAD/ # OpenROAD installation
+├── OpenRAM/ # OpenRAM installation
+├── openroad-flow-scripts/ # Flow scripts and examples
+├── run_openram.sh # Run a openRAM test 
+├── setup_enviroment.sh # Enviroment setup script for OpenROAD + OpenRAM
+└── README.md 
+'''
 
 ## 🔧 Environment Setup
 
