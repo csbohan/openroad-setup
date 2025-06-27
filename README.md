@@ -68,8 +68,8 @@ BUILD_THREADS=4 ./setup_openroad.sh
 ## 📁 Installation Structure
 
 After installation, tools are organized as follows:
-~/openroad-setup/
 ```
+~/openroad-setup/
 ├── OpenROAD/ # OpenROAD installation
 ├── OpenRAM/ # OpenRAM installation
 ├── openroad-flow-scripts/ # Flow scripts and examples
