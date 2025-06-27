@@ -89,14 +89,40 @@ python3 -c "import openram; print('OpenRAM installed successfully')"
 
 ### Test OpenROAD
 ```bash
-cd ~/openroad-tools/OpenROAD-flow-scripts
-make DESIGN_CONFIG=./designs/sky130hd/gcd/config.mk
+cd ~/openroad-setup/OpenROAD-flow-scripts
+make DESIGN_CONFIG=./designs/sky130hd/gcd/config.mk <-- Many designs given in flow scripts 
 ```
 
 ### Test OpenRAM
 ```bash
-cd ~/openroad-tools/OpenRAM
-python3 openram.py examples/configs/config_20nm.py
+cd ~/openroad-setup/OpenRAM
+python3 openram.py SRAM_32x128_1rw.py <-- Your Design (Example given below) 
+```
+Example design SRAM_32x128_1rw.py 
+Add this to your OpenRAM Directory with code below 
+```
+cat > SRAM_32x128_1rw.py << EOF
+num_rw_ports    = 1
+num_r_ports     = 0
+num_w_ports     = 0
+
+word_size       = 32
+num_words       = 128
+num_banks       = 1
+words_per_row   = 4
+
+tech_name       = "freepdk45"
+process_corners = ["TT"]
+supply_voltages = [1.1]
+temperatures    = [25]
+
+route_supplies  = True
+check_lvsdrc    = True
+
+output_path     = "SRAM_32x128_1rw"
+output_name     = "SRAM_32x128_1rw"
+instance_name   = "SRAM_32x128_1rw"
+EOF
 ```
 
 ## 📊 Performance Tips
