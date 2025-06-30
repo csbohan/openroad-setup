@@ -108,58 +108,48 @@ print_status "Building OpenROAD-flow-scripts..."
 ./build_openroad.sh --local
 cd ..
 
-print_header "Step 4: Installing OpenRAM"
+print_header "Step 4: Installing OpenRAM (with virtual environment)"
 
-# Install OpenRAM
-if [[ ! -d "OpenRAM" ]]; then
-    print_status "Cloning OpenRAM..."
-    git clone https://github.com/VLSIDA/OpenRAM.git
-fi
+# Remove any previous OpenRAM installation in home directory
+cd "$HOME"
+rm -rf OpenRAM
 
+# Clone OpenRAM
+print_status "Cloning OpenRAM..."
+git clone https://github.com/VLSIDA/OpenRAM.git
 cd OpenRAM
 
+# Set environment variables
+export OPENRAM_HOME="$HOME/OpenRAM/compiler"
+export OPENRAM_TECH="$HOME/OpenRAM/technology"
+export PYTHONPATH=$OPENRAM_HOME
+
+# Install system dependencies
+print_status "Installing system dependencies for OpenRAM..."
+sudo apt update
+sudo apt install -y build-essential python3-dev python3-pip python3-venv klayout
+
+# Set up Python virtual environment
+print_status "Setting up Python virtual environment for OpenRAM..."
+python3 -m venv openram_env
+source openram_env/bin/activate
+
 # Install Python dependencies
-print_status "Installing Python dependencies..."
-pip3 install -r requirements.txt --break-system-packages
+print_status "Installing Python dependencies in virtual environment..."
+pip install numpy matplotlib scipy scikit-learn
 
-# Set up environment
-print_status "Setting up OpenRAM environment..."
-source setpaths.sh
+# Patch OpenRAM for rom_bank import issue
+print_status "Patching OpenRAM for rom_bank import issue..."
+sed -i 's/from .rom_bank import \*/# from .rom_bank import \*/' compiler/modules/__init__.py
 
-# Quick test
-print_status "Running quick OpenRAM test..."
-cat > quick_test.py << EOF
-num_rw_ports    = 1
-num_r_ports     = 0
-num_w_ports     = 0
-word_size       = 8
-num_words       = 16
-num_banks       = 1
-words_per_row   = 4
-tech_name       = "scn4m_subm"
-process_corners = ["TT"]
-supply_voltages = [3.3]
-temperatures    = [25]
-route_supplies  = False
-check_lvsdrc    = False
-output_path     = "quick_test"
-output_name     = "quick_test"
-instance_name   = "quick_test"
-EOF
+# Run a test compile with example config
+print_status "Running OpenRAM with example config to verify installation..."
+python3 sram_compiler.py macros/sram_configs/example_config_freepdk45.py
 
-# Run test in background with timeout
-timeout 300 python3 sram_compiler.py quick_test.py > test.log 2>&1 || {
-    print_warning "Quick test timed out or failed. This is normal for first run."
-    print_warning "Check test.log for details. OpenRAM should still work."
-}
+# Deactivate virtual environment
+deactivate
 
-if [ -f "quick_test/quick_test.v" ]; then
-    print_status "OpenRAM test successful!"
-else
-    print_warning "OpenRAM test may have failed, but installation should still work."
-fi
-
-cd ..
+cd "$INSTALL_DIR"
 
 print_header "Step 5: Creating Environment Scripts"
 
