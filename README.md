@@ -2,7 +2,7 @@
 
 A comprehensive setup script to install OpenROAD, OpenRAM, and OpenROAD-flow-scripts with a single command on Linux systems.
 
-## 🚀 Quick Start
+## Quick Start
 
 ```bash
 git clone https://github.com/csbohan/openroad-setup.git
@@ -11,95 +11,100 @@ chmod +x setup_openroad.sh
 ./setup_openroad.sh
 ```
 
-## 📋 What This Script Installs
+## What This Script Installs
 
 - **OpenROAD** - Open-source RTL-to-GDSII flow
 - **OpenRAM** - Open-source memory compiler
 - **OpenROAD-flow-scripts** - Complete design flows and examples
 - **All dependencies** - System packages, Python packages, and build tools
 
-## 🖥️ Supported Systems
+## Supported Systems
 
-- Ubuntu 20.04 LTS and newer
+- Ubuntu 20.04 LTS, 22.04 LTS, 24.04 LTS (including 24.04.3)
 - Debian 11 and newer
 - Other Debian-based distributions
 
-## 📦 Prerequisites
+## Prerequisites
 
 - Linux system with sudo privileges
 - Internet connection
 - At least 8GB free disk space
 - 4GB+ RAM recommended
 
-## 🛠️ Installation
+## Installation
 
 ### Method 1: Clone Repository
+
 ```bash
-git clone https://github.com/csbohan/openroad-setup.gitt
+git clone https://github.com/csbohan/openroad-setup.git
 cd openroad-setup
 chmod +x setup_openroad.sh
 ./setup_openroad.sh
 ```
 
-## ⚙️ Script Options
-
-The script supports several environment variables for customization:
-
-```bash
-# Install to custom directory (default: $HOME/openroad-tools)
-INSTALL_DIR=/path/to/install ./setup_openroad.sh
-
-# Skip specific components
-SKIP_OPENROAD=1 ./setup_openroad.sh
-SKIP_OPENRAM=1 ./setup_openroad.sh
-SKIP_FLOW_SCRIPTS=1 ./setup_openroad.sh
-
-# Use specific number of build threads (default: all available cores)
-BUILD_THREADS=4 ./setup_openroad.sh
-```
-
-## 📁 Installation Structure
+## Installation Structure
 
 After installation, tools are organized as follows:
+
 ```
 ~/openroad-setup/
-├── OpenROAD/ # OpenROAD installation
-├── OpenRAM/ # OpenRAM installation
+├── OpenROAD/              # OpenROAD installation
+├── OpenRAM/               # OpenRAM installation
 ├── openroad-flow-scripts/ # Flow scripts and examples
-├── run_openram.sh # Run a openRAM test 
-├── setup_enviroment.sh # Enviroment setup script for OpenROAD + OpenRAM
-└── README.md 
+├── run_openram.sh         # Run OpenRAM in tmux
+├── setup_environment.sh   # Environment setup script for OpenROAD + OpenRAM
+└── README.md
 ```
 
-## 🔧 Environment Setup
+## Environment Setup
 
-The script automatically adds tools to your PATH. After installation, restart your terminal or run:
+The script automatically adds tools to your PATH. After installation, run:
 
 ```bash
-source ~/.bashrc
+source ~/openroad-setup/setup_environment.sh
 ```
 
+Or restart your terminal and run the same, or add it to your `~/.bashrc`.
+
 Verify installation:
+
 ```bash
 openroad -version
 python3 -c "import openram; print('OpenRAM installed successfully')"
 ```
 
-## 🚀 Quick Test
+## Quick Test
 
 ### Test OpenROAD
+
 ```bash
-cd ~/openroad-setup/OpenROAD-flow-scripts
-make DESIGN_CONFIG=./designs/sky130hd/gcd/config.mk <-- Many designs given in flow scripts 
+cd ~/openroad-setup/openroad-flow-scripts
+source env.sh
+cd flow
+make DESIGN_CONFIG=./designs/sky130hd/gcd/config.mk
 ```
 
+(Many other designs are available in the flow scripts.)
+
 ### Test OpenRAM
-FIRST TEST MAY BE 25+ min
+
+First run may take 25+ minutes.
+
 ```bash
 cd ~/openroad-setup/OpenRAM
-python3 openram.py SRAM_32x128_1rw.py <-- Your Design (Example given below) 
+source openram_env/bin/activate
+python3 sram_compiler.py macros/sram_configs/example_config_freepdk45.py
 ```
-`SRAM_32x128_1rw.py` – Add this file to your `OpenRAM/` directory to run the following example:
+
+Or use the `run_openram.sh` helper for long jobs:
+
+```bash
+cd ~/openroad-setup
+./run_openram.sh macros/sram_configs/example_config_freepdk45.py
+```
+
+Example custom config `SRAM_32x128_1rw.py` to add to your `OpenRAM/` directory:
+
 ```
 cat > SRAM_32x128_1rw.py << EOF
 num_rw_ports    = 1
@@ -125,50 +130,59 @@ instance_name   = "SRAM_32x128_1rw"
 EOF
 ```
 
-## 📊 Performance Tips
+Then run: `python3 sram_compiler.py SRAM_32x128_1rw.py`
+
+## Performance Tips
 
 ### For Large SRAM Generation
+
 - **RAM**: 8GB+ recommended for large SRAMs (>1MB)
 - **CPU**: Single-thread performance matters more than core count
 - **Storage**: SSD recommended for faster builds
 
 ### Speeding Up OpenRAM
+
 ```bash
 # Disable DRC/LVS checks for faster generation (testing only)
-python3 openram.py -n config.py
+python3 sram_compiler.py -n config.py
 
 # Use smaller test configurations first
-python3 openram.py examples/configs/config_20nm_small.py
+python3 sram_compiler.py macros/sram_configs/example_config_freepdk45.py
 ```
 
-## 🔍 Troubleshooting
+## Troubleshooting
 
 ### Common Issues
 
 **Permission Denied Errors:**
+
 ```bash
-sudo chown -R $USER:$USER ~/openroad-tools
+sudo chown -R $USER:$USER ~/openroad-setup
 ```
 
 **Python Package Conflicts:**
+
 ```bash
-# Use virtual environment
-python3 -m venv openram_env
+# Use the virtual environment created by the script
+cd ~/openroad-setup/OpenRAM
 source openram_env/bin/activate
 pip install -r requirements.txt
 ```
 
 **Build Failures:**
+
 ```bash
-# Check logs
-tail -f ~/openroad-tools/logs/setup.log
+# Check logs in the build directories
+# OpenROAD: ~/openroad-setup/OpenROAD/build/openroad_build.log
+# Flow:     ~/openroad-setup/openroad-flow-scripts/build_openroad.log
 
 # Clean and retry
-rm -rf ~/openroad-tools
+rm -rf ~/openroad-setup/OpenROAD ~/openroad-setup/openroad-flow-scripts ~/openroad-setup/OpenRAM
 ./setup_openroad.sh
 ```
 
 **Long SSH Sessions:**
+
 ```bash
 # Use tmux to prevent disconnection
 tmux new-session -d -s openroad_setup './setup_openroad.sh'
@@ -177,83 +191,95 @@ tmux attach -t openroad_setup
 
 ### Getting Help
 
-1. Check the installation logs: `~/openroad-tools/logs/`
-2. Verify system requirements
+1. Check the installation logs in the respective build directories
+2. Verify system requirements (Ubuntu 20.04/22.04/24.04 or Debian 11+)
 3. Try running individual components manually
 4. Open an issue with log files attached
 
-## 🧪 Development and Testing
+## Development and Testing
 
 ### Testing the Script
+
 ```bash
-# Test in Docker container
-docker run -it ubuntu:22.04
-apt update && apt install -y wget
-wget https://raw.githubusercontent.com/yourusername/openroad-setup/main/setup_openroad.sh
+# Test in Docker container (Ubuntu 24.04)
+docker run -it ubuntu:24.04
+apt update && apt install -y git
+git clone https://github.com/csbohan/openroad-setup.git
+cd openroad-setup
 chmod +x setup_openroad.sh
 ./setup_openroad.sh
 ```
 
 ### Contributing
+
 1. Fork the repository
 2. Create a feature branch
-3. Test on clean Ubuntu/Debian systems
+3. Test on clean Ubuntu/Debian systems (including Ubuntu 24.04)
 4. Submit a pull request
 
-## 📚 Useful Resources
+## Useful Resources
 
 - [OpenROAD Documentation](https://openroad.readthedocs.io/)
 - [OpenRAM Documentation](https://openram.readthedocs.io/)
 - [OpenROAD Flow Scripts](https://github.com/The-OpenROAD-Project/OpenROAD-flow-scripts)
 - [FreePDK45 Technology](https://www.eda.ncsu.edu/freepdk/freepdk45/)
 
-## 🏗️ Example Workflows
+## Example Workflows
 
 ### SRAM Generation with OpenRAM
+
 ```bash
-cd ~/openroad-tools/OpenRAM
+cd ~/openroad-setup/OpenRAM
+source openram_env/bin/activate
+
 # Create config file
 cat > my_sram_config.py << EOF
 word_size = 32
 num_words = 128
-technology = "freepdk45"
+tech_name = "freepdk45"
 num_rw_ports = 1
 num_r_ports = 0
 num_w_ports = 0
 EOF
 
 # Generate SRAM
-python3 openram.py my_sram_config.py
+python3 sram_compiler.py my_sram_config.py
 ```
 
 ### RTL-to-GDS with OpenROAD
+
 ```bash
-cd ~/openroad-tools/OpenROAD-flow-scripts
+cd ~/openroad-setup/openroad-flow-scripts
+source env.sh
+cd flow
 # Use provided examples
 make DESIGN_CONFIG=./designs/sky130hd/aes/config.mk
 ```
 
-## ⚡ Performance Benchmarks
+## Performance Benchmarks
 
 Typical installation times on different systems:
 
-| System | CPU | RAM | Time |
-|--------|-----|-----|------|
-| Ubuntu 22.04 | 8-core i7 | 16GB | ~45 min |
-| Ubuntu 20.04 | 4-core i5 | 8GB | ~75 min |
-| Debian 11 | 2-core VM | 4GB | ~120 min |
+| System        | CPU       | RAM  | Time    |
+|---------------|-----------|------|---------|
+| Ubuntu 24.04  | 8-core i7 | 16GB | ~45 min |
+| Ubuntu 22.04  | 8-core i7 | 16GB | ~45 min |
+| Ubuntu 20.04  | 4-core i5 | 8GB  | ~75 min |
+| Debian 11     | 2-core VM | 4GB  | ~120 min|
 
-## 📄 License
+## License
 
 This setup script is provided under the MIT License. Individual tools have their own licenses:
+
 - OpenROAD: BSD 3-Clause License
 - OpenRAM: BSD 3-Clause License
 - OpenROAD-flow-scripts: BSD 3-Clause License
 
-## 🤝 Contributing
+## Contributing
 
-Contributions are welcome! Please:
-1. Test on multiple Linux distributions
+Contributions are welcome. Please:
+
+1. Test on multiple Linux distributions (including Ubuntu 24.04.3)
 2. Update documentation for new features
 3. Follow shell scripting best practices
 4. Include error handling and logging
