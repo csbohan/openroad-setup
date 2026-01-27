@@ -46,6 +46,18 @@ if [[ "$(uname -s)" != "Linux" ]]; then
 fi
 
 print_status "Detected OS: Linux"
+if [ -f /etc/os-release ]; then
+    # shellcheck source=/dev/null
+    . /etc/os-release
+    print_status "Detected: ${PRETTY_NAME:-$ID $VERSION_ID}"
+fi
+
+# Ensure universe is enabled on Ubuntu (needed for some packages on 22.04/24.04)
+if [ -f /etc/os-release ] && grep -qi '^ID=ubuntu' /etc/os-release 2>/dev/null; then
+    if command -v add-apt-repository &>/dev/null; then
+        sudo add-apt-repository -y universe 2>/dev/null || true
+    fi
+fi
 
 # Create installation directory
 INSTALL_DIR="$HOME/openroad-setup"
@@ -59,14 +71,14 @@ print_status "Updating system packages..."
 sudo apt update
 sudo apt upgrade -y
 
-# Install dependencies (updated for modern Ubuntu/Debian)
+# Install dependencies (tested on Ubuntu 20.04, 22.04, 24.04 and Debian 11+)
 print_status "Installing system dependencies..."
 sudo apt install -y \
     build-essential cmake git python3 python3-pip \
     wget curl tmux screen \
     libboost-all-dev libgmp-dev libmpfr-dev libmpc-dev \
     libffi-dev libreadline-dev libsqlite3-dev libbz2-dev \
-    libncurses5-dev libssl-dev liblzma-dev libgdbm-dev \
+    libncurses-dev libssl-dev liblzma-dev libgdbm-dev \
     libnss3-dev libfreetype6-dev libpng-dev libjpeg-dev \
     libtiff-dev libwebp-dev \
     libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
@@ -87,42 +99,45 @@ cd OpenROAD
 print_status "Installing OpenROAD dependencies..."
 sudo ./etc/DependencyInstaller.sh -all
 
+# Use official Build.sh (reads deps from etc/openroad_deps_prefixes.txt); then install to /usr/local
 print_status "Building OpenROAD (this will take 30-60 minutes)..."
-mkdir -p build
-cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-make -j$(nproc)
-sudo make install
-cd ../..
+./etc/Build.sh
+sudo cmake --build build --target install
+cd ..
 
 print_header "Step 3: Installing OpenROAD-flow-scripts"
 
 # Install OpenROAD-flow-scripts
 if [[ ! -d "openroad-flow-scripts" ]]; then
     print_status "Cloning OpenROAD-flow-scripts..."
-    git clone https://github.com/The-OpenROAD-Project/openroad-flow-scripts.git
+    git clone --recursive https://github.com/The-OpenROAD-Project/openroad-flow-scripts.git
 fi
 
 cd openroad-flow-scripts
-print_status "Building OpenROAD-flow-scripts..."
+# Flow’s setup.sh installs deps; may overlap with DependencyInstaller but ensures flow-specific deps
+if [[ -f ./setup.sh ]]; then
+    print_status "Running openroad-flow-scripts setup.sh..."
+    sudo ./setup.sh
+fi
+print_status "Building OpenROAD-flow-scripts (OpenROAD, Yosys, etc.)..."
 ./build_openroad.sh --local
 cd ..
 
 print_header "Step 4: Installing OpenRAM (with virtual environment)"
 
-# Remove any previous OpenRAM installation in home directory
-cd "$HOME"
+# Remove any previous OpenRAM installation in install directory (must match OPENRAM_HOME in setup_environment.sh)
+cd "$INSTALL_DIR"
 rm -rf OpenRAM
 
-# Clone OpenRAM
+# Clone OpenRAM into INSTALL_DIR so OPENRAM_HOME=$HOME/openroad-setup/OpenRAM is correct
 print_status "Cloning OpenRAM..."
 git clone https://github.com/VLSIDA/OpenRAM.git
 cd OpenRAM
 
-# Set environment variables
-export OPENRAM_HOME="$HOME/OpenRAM/compiler"
-export OPENRAM_TECH="$HOME/OpenRAM/technology"
-export PYTHONPATH=$OPENRAM_HOME
+# Set environment variables (OPENRAM_HOME = repo root, as used by setpaths.sh)
+export OPENRAM_HOME="$INSTALL_DIR/OpenRAM"
+export OPENRAM_TECH="$INSTALL_DIR/OpenRAM/technology"
+export PYTHONPATH="$OPENRAM_HOME/compiler"
 
 # Install system dependencies
 print_status "Installing system dependencies for OpenRAM..."
@@ -138,9 +153,9 @@ source openram_env/bin/activate
 print_status "Installing Python dependencies in virtual environment..."
 pip install numpy matplotlib scipy scikit-learn
 
-# Patch OpenRAM for rom_bank import issue
-print_status "Patching OpenRAM for rom_bank import issue..."
-sed -i 's/from .rom_bank import \*/# from .rom_bank import \*/' compiler/modules/__init__.py
+# Note: A rom_bank patch used here in the past has been removed; current OpenRAM
+# includes and requires the rom_bank module. If you see rom_bank import errors,
+# check OpenRAM issues for workarounds.
 
 # Run a test compile with example config
 print_status "Running OpenRAM with example config to verify installation..."
@@ -162,8 +177,8 @@ export OPENROAD_HOME="$HOME/openroad-setup/OpenROAD"
 export OPENROAD_FLOW_HOME="$HOME/openroad-setup/openroad-flow-scripts"
 export OPENRAM_HOME="$HOME/openroad-setup/OpenRAM"
 
-# Add OpenROAD to PATH
-export PATH="$OPENROAD_HOME/build/src:$PATH"
+# Add OpenROAD to PATH (Build.sh puts binary in build/bin)
+export PATH="$OPENROAD_HOME/build/bin:$PATH"
 
 # Add OpenROAD-flow-scripts to PATH
 export PATH="$OPENROAD_FLOW_HOME/flow:$PATH"
@@ -199,15 +214,17 @@ fi
 CONFIG_FILE=$1
 SESSION_NAME="openram_$(basename $CONFIG_FILE .py)"
 
-# Setup environment
-source setup_environment.sh
+# Setup environment (find setup_environment.sh next to this script)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/setup_environment.sh"
 
 # Create new tmux session
 tmux new-session -d -s "$SESSION_NAME"
 
-# Run OpenRAM in tmux
-tmux send-keys -t "$SESSION_NAME" "cd $HOME/openroad-setup/OpenRAM" Enter
-tmux send-keys -t "$SESSION_NAME" "source ../setup_environment.sh" Enter
+# Run OpenRAM in tmux: source env, cd to OpenRAM, activate venv if present, run compiler
+tmux send-keys -t "$SESSION_NAME" "source $SCRIPT_DIR/setup_environment.sh" Enter
+tmux send-keys -t "$SESSION_NAME" "cd \$OPENRAM_HOME" Enter
+tmux send-keys -t "$SESSION_NAME" "if [ -f openram_env/bin/activate ]; then source openram_env/bin/activate; fi" Enter
 tmux send-keys -t "$SESSION_NAME" "python3 sram_compiler.py $CONFIG_FILE" Enter
 
 echo "OpenRAM started in tmux session: $SESSION_NAME"
@@ -272,8 +289,11 @@ python3 sram_compiler.py my_sram.py
 
 ### Use OpenROAD
 ```bash
-# Your OpenROAD commands here
+# Standalone (after source setup_environment.sh)
 openroad
+
+# For OpenROAD-flow-scripts (e.g. make in flow/), use the flow’s env:
+cd openroad-flow-scripts && source env.sh && cd flow && make
 ```
 
 ## Installation Directory
@@ -282,7 +302,7 @@ Everything is installed in: `$HOME/openroad-setup/`
 
 ## Requirements
 
-- Ubuntu 18.04+ or Debian 10+
+- Ubuntu 20.04, 22.04, or 24.04 LTS (including 24.04.3) or Debian 11+
 - 8GB+ RAM recommended
 - 20GB+ free disk space
 - Internet connection
