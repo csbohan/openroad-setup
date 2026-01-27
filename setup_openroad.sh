@@ -85,7 +85,7 @@ sudo apt install -y \
     libgtk-3-dev libatlas-base-dev libhdf5-dev \
     libhdf5-serial-dev python3-pyqt5 libblas-dev liblapack-dev \
     gfortran libopenblas-dev ruby \
-    libyaml-cpp-dev
+    libyaml-cpp-dev libtbb-dev libcapnp-dev capnproto
 
 print_header "Step 2: Installing OpenROAD"
 
@@ -107,6 +107,13 @@ cd ..
 
 print_header "Step 3: Installing OpenROAD-flow-scripts"
 
+# Remove existing /opt/or-tools if present (owned by root). Upstream flow scripts
+# may try to rm it as the current user and fail with "Permission denied".
+if [[ -d /opt/or-tools ]]; then
+    print_status "Removing existing /opt/or-tools (requires sudo)..."
+    sudo rm -rf /opt/or-tools
+fi
+
 # Install OpenROAD-flow-scripts
 if [[ ! -d "openroad-flow-scripts" ]]; then
     print_status "Cloning OpenROAD-flow-scripts..."
@@ -125,19 +132,25 @@ cd ..
 
 print_header "Step 4: Installing OpenRAM (with virtual environment)"
 
-# Remove any previous OpenRAM installation in install directory (must match OPENRAM_HOME in setup_environment.sh)
+# Remove any previous OpenRAM installation in install directory
 cd "$INSTALL_DIR"
 rm -rf OpenRAM
 
-# Clone OpenRAM into INSTALL_DIR so OPENRAM_HOME=$HOME/openroad-setup/OpenRAM is correct
+# Clone OpenRAM into INSTALL_DIR
 print_status "Cloning OpenRAM..."
 git clone https://github.com/VLSIDA/OpenRAM.git
 cd OpenRAM
 
-# Set environment variables (OPENRAM_HOME = repo root, as used by setpaths.sh)
-export OPENRAM_HOME="$INSTALL_DIR/OpenRAM"
+# freepdk45 does not define lef_rom_interconnect; rom_bank (loaded by modules) requires it. Add a stub.
+if ! grep -q "lef_rom_interconnect" technology/freepdk45/tech/tech.py 2>/dev/null; then
+    print_status "Adding lef_rom_interconnect to freepdk45 tech (required by rom_bank)..."
+    sed -i '/^m3_stack = ("m3", "via3", "m4")$/a lef_rom_interconnect = ["m1", "m2", "m3", "m4"]' technology/freepdk45/tech/tech.py
+fi
+
+# OPENRAM_HOME must be the compiler/ subdir: common.py loads the package from OPENRAM_HOME/../__init__.py
+export OPENRAM_HOME="$INSTALL_DIR/OpenRAM/compiler"
 export OPENRAM_TECH="$INSTALL_DIR/OpenRAM/technology"
-export PYTHONPATH="$OPENRAM_HOME/compiler"
+export PYTHONPATH="$OPENRAM_HOME"
 
 # Install system dependencies
 print_status "Installing system dependencies for OpenRAM..."
@@ -149,13 +162,9 @@ print_status "Setting up Python virtual environment for OpenRAM..."
 python3 -m venv openram_env
 source openram_env/bin/activate
 
-# Install Python dependencies
+# Install Python dependencies (pin numpy<2: OpenRAM's vector/float() fails with numpy 2.x)
 print_status "Installing Python dependencies in virtual environment..."
-pip install numpy matplotlib scipy scikit-learn
-
-# Note: A rom_bank patch used here in the past has been removed; current OpenRAM
-# includes and requires the rom_bank module. If you see rom_bank import errors,
-# check OpenRAM issues for workarounds.
+pip install "numpy>=1.17.4,<2" matplotlib scipy scikit-learn
 
 # Run a test compile with example config
 print_status "Running OpenRAM with example config to verify installation..."
@@ -175,7 +184,11 @@ cat > setup_environment.sh << 'EOF'
 
 export OPENROAD_HOME="$HOME/openroad-setup/OpenROAD"
 export OPENROAD_FLOW_HOME="$HOME/openroad-setup/openroad-flow-scripts"
-export OPENRAM_HOME="$HOME/openroad-setup/OpenRAM"
+export OPENRAM_ROOT="$HOME/openroad-setup/OpenRAM"
+# OPENRAM_HOME must be compiler/ so common.py finds OPENRAM_HOME/../__init__.py
+export OPENRAM_HOME="$OPENRAM_ROOT/compiler"
+export OPENRAM_TECH="$OPENRAM_ROOT/technology"
+export PYTHONPATH="$OPENRAM_HOME"
 
 # Add OpenROAD to PATH (Build.sh puts binary in build/bin)
 export PATH="$OPENROAD_HOME/build/bin:$PATH"
@@ -183,15 +196,10 @@ export PATH="$OPENROAD_HOME/build/bin:$PATH"
 # Add OpenROAD-flow-scripts to PATH
 export PATH="$OPENROAD_FLOW_HOME/flow:$PATH"
 
-# Setup OpenRAM environment
-if [ -f "$OPENRAM_HOME/setpaths.sh" ]; then
-    source "$OPENRAM_HOME/setpaths.sh"
-fi
-
 echo "OpenROAD + OpenRAM environment ready!"
 echo "OpenROAD: $OPENROAD_HOME"
 echo "OpenROAD-flow-scripts: $OPENROAD_FLOW_HOME"
-echo "OpenRAM: $OPENRAM_HOME"
+echo "OpenRAM: $OPENRAM_ROOT"
 EOF
 
 chmod +x setup_environment.sh
@@ -221,9 +229,9 @@ source "$SCRIPT_DIR/setup_environment.sh"
 # Create new tmux session
 tmux new-session -d -s "$SESSION_NAME"
 
-# Run OpenRAM in tmux: source env, cd to OpenRAM, activate venv if present, run compiler
+# Run OpenRAM in tmux: source env, cd to OpenRAM root, activate venv if present, run compiler
 tmux send-keys -t "$SESSION_NAME" "source $SCRIPT_DIR/setup_environment.sh" Enter
-tmux send-keys -t "$SESSION_NAME" "cd \$OPENRAM_HOME" Enter
+tmux send-keys -t "$SESSION_NAME" "cd \$OPENRAM_ROOT" Enter
 tmux send-keys -t "$SESSION_NAME" "if [ -f openram_env/bin/activate ]; then source openram_env/bin/activate; fi" Enter
 tmux send-keys -t "$SESSION_NAME" "python3 sram_compiler.py $CONFIG_FILE" Enter
 
