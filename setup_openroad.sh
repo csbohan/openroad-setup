@@ -1,354 +1,416 @@
 #!/bin/bash
 
-# OpenROAD + OpenRAM Linux Setup Script
-# One-command setup for Ubuntu/Debian systems
+# OpenROAD + OpenROAD-flow-scripts + OpenRAM — minimal Linux setup
+# Skips steps when tools are already installed. Single OpenROAD build via flow (no 3-hour double build).
 
-set -e  # Exit on any error
+set -e
 
-echo " OpenROAD + OpenRAM Linux Setup"
-echo "=================================="
-echo "This will install OpenROAD, OpenROAD-flow-scripts, and OpenRAM"
+echo " OpenROAD + Flow + OpenRAM (minimal setup)"
+echo "==========================================="
 echo ""
 
-# Colors for output
+# Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-print_status() {
-    echo -e "${GREEN}[INFO]${NC} $1"
-}
+print_status()  { echo -e "${GREEN}[INFO]${NC} $1"; }
+print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
+print_error()   { echo -e "${RED}[ERROR]${NC} $1"; }
+print_header()  { echo -e "${BLUE}[SETUP]${NC} $1"; }
+print_skip()    { echo -e "${GREEN}[SKIP]${NC} $1 (already present)"; }
 
-print_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
-}
+# Parse options
+SKIP_OPENRAM_TEST=true
+RUN_APT_UPGRADE=false
+CLEAR_ENV=false
+INSTALL_DIR="${OPENROAD_INSTALL_DIR:-$HOME/openroad-setup}"
 
-print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --test-openram)  SKIP_OPENRAM_TEST=false; shift ;;
+        --upgrade)       RUN_APT_UPGRADE=true; shift ;;
+        --fresh)         CLEAR_ENV=true; shift ;;
+        --install-dir)   INSTALL_DIR="$2"; shift 2 ;;
+        -h|--help)
+            echo "Usage: $0 [--test-openram] [--upgrade] [--fresh] [--install-dir DIR]"
+            echo "  --test-openram   Run OpenRAM example after install (adds ~25 min)"
+            echo "  --upgrade        Run 'apt upgrade' (slower, more complete)"
+            echo "  --fresh          Unset OpenROAD/OpenRAM env vars so install is not skipped"
+            echo "  --install-dir    Install to DIR (default: \$HOME/openroad-setup)"
+            exit 0 ;;
+        *) shift ;;
+    esac
+done
 
-print_header() {
-    echo -e "${BLUE}[SETUP]${NC} $1"
-}
-
-# Check if running as root
-if [[ $EUID -eq 0 ]]; then
-   print_error "This script should not be run as root"
-   exit 1
+# Clear paths so we don't skip steps due to old env (restart from top)
+if [[ "$CLEAR_ENV" == true ]]; then
+    print_status "Clearing OpenROAD/OpenRAM env vars for fresh run..."
+    unset OPENROAD_HOME OPENROAD_FLOW_HOME OPENROAD_EXE YOSYS_EXE
+    unset OPENRAM_ROOT OPENRAM_HOME OPENRAM_TECH
+    # Remove common install paths from PATH so 'openroad' / 'yosys' aren't found from old installs
+    INSTALL_DIR_ABS="$(cd -P "$INSTALL_DIR" 2>/dev/null && pwd)" || true
+    if [[ -n "$INSTALL_DIR_ABS" ]]; then
+        export PATH="$(echo "$PATH" | tr ':' '\n' | grep -v "$INSTALL_DIR_ABS" | tr '\n' ':' | sed 's/:$//')"
+    fi
+    print_status "Env cleared. Proceeding with full install checks."
 fi
 
-# Check if we're on Linux
+# --- Checks: already installed? ---
+has_openroad() {
+    if command -v openroad &>/dev/null; then
+        openroad -version &>/dev/null && return 0
+    fi
+    return 1
+}
+
+has_yosys() {
+    command -v yosys &>/dev/null && yosys -version &>/dev/null
+}
+
+# Parse Yosys version (e.g. "0.60" from "Yosys 0.60 (git sha1 ...)")
+get_yosys_version() {
+    local v
+    v=$(yosys -version 2>/dev/null | sed -n 's/^Yosys \([0-9]*\.[0-9]*\).*/\1/p')
+    echo "$v"
+}
+
+# Return 0 if system Yosys is >= 0.58 (flow requirement)
+yosys_version_ok() {
+    local v
+    v=$(get_yosys_version)
+    [[ -z "$v" ]] && return 1
+    # Compare major.minor: 0.58+ is ok
+    local major minor
+    major=${v%%.*}
+    minor=${v#*.}; minor=${minor%%.*}
+    [[ "$major" -gt 0 ]] && return 0
+    [[ "$minor" -ge 58 ]] && return 0
+    return 1
+}
+
+has_flow_env() {
+    [[ -n "$OPENROAD_FLOW_HOME" && -f "$OPENROAD_FLOW_HOME/env.sh" ]] && return 0
+    [[ -d "$INSTALL_DIR/openroad-flow-scripts" && -f "$INSTALL_DIR/openroad-flow-scripts/env.sh" ]] && return 0
+    return 1
+}
+
+# Only skip OpenRAM if it's already in *this* install dir (not elsewhere via OPENRAM_HOME)
+has_openram() {
+    if [[ -d "$INSTALL_DIR/OpenRAM/compiler" ]]; then
+        PYTHONPATH="$INSTALL_DIR/OpenRAM/compiler" python3 -c "import openram" 2>/dev/null && return 0
+    fi
+    return 1
+}
+
+# Resolve flow dir for checks
+get_flow_dir() { echo "$INSTALL_DIR/openroad-flow-scripts"; }
+
+# --- Platform ---
 if [[ "$(uname -s)" != "Linux" ]]; then
-    print_error "This script is for Linux only"
+    print_error "This script is for Linux only."
     exit 1
 fi
 
-print_status "Detected OS: Linux"
+if [[ $EUID -eq 0 ]]; then
+    print_error "Do not run as root."
+    exit 1
+fi
+
+# Validate sudo once so the user is only prompted for password one time
+print_status "Checking sudo (you may be asked for your password once)..."
+sudo -v
+
+print_status "Install directory: $INSTALL_DIR"
+print_status "  (repos and tools go here; use --install-dir DIR to install elsewhere)"
 if [ -f /etc/os-release ]; then
     # shellcheck source=/dev/null
     . /etc/os-release
-    print_status "Detected: ${PRETTY_NAME:-$ID $VERSION_ID}"
+    print_status "OS: ${PRETTY_NAME:-$ID $VERSION_ID}"
 fi
 
-# Ensure universe is enabled on Ubuntu (needed for some packages on 22.04/24.04)
+# Ubuntu: ensure universe for some packages
 if [ -f /etc/os-release ] && grep -qi '^ID=ubuntu' /etc/os-release 2>/dev/null; then
     if command -v add-apt-repository &>/dev/null; then
         sudo add-apt-repository -y universe 2>/dev/null || true
     fi
 fi
 
-# Create installation directory
-INSTALL_DIR="$HOME/openroad-setup"
+RUN_DIR="$(pwd)"
 mkdir -p "$INSTALL_DIR"
 cd "$INSTALL_DIR"
+INSTALL_DIR="$(pwd)"
 
-print_header "Step 1: Installing System Dependencies"
+# =============================================================================
+# Step 1: System dependencies (minimal; flow's setup.sh will add more if needed)
+# =============================================================================
+print_header "Step 1: System dependencies"
 
-# Update system packages
-print_status "Updating system packages..."
-sudo apt update
-sudo apt upgrade -y
+# Check for essentials already installed
+NEED_DEPS=false
+for cmd in cmake g++ git python3; do
+    if ! command -v "$cmd" &>/dev/null; then NEED_DEPS=true; break; fi
+done
 
-# Install dependencies (tested on Ubuntu 20.04, 22.04, 24.04 and Debian 11+)
-print_status "Installing system dependencies..."
-sudo apt install -y \
-    build-essential cmake git python3 python3-pip \
-    wget curl tmux screen \
-    libboost-all-dev libgmp-dev libmpfr-dev libmpc-dev \
-    libffi-dev libreadline-dev libsqlite3-dev libbz2-dev \
-    libncurses-dev libssl-dev liblzma-dev libgdbm-dev \
-    libnss3-dev libfreetype6-dev libpng-dev libjpeg-dev \
-    libtiff-dev libwebp-dev \
-    libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
-    libgtk-3-dev libatlas-base-dev libhdf5-dev \
-    libhdf5-serial-dev python3-pyqt5 libblas-dev liblapack-dev \
-    gfortran libopenblas-dev ruby \
-    libyaml-cpp-dev libtbb-dev libcapnp-dev capnproto
-
-print_header "Step 2: Installing OpenROAD"
-
-# Install OpenROAD
-if [[ ! -d "OpenROAD" ]]; then
-    print_status "Cloning OpenROAD..."
-    git clone --recursive https://github.com/The-OpenROAD-Project/OpenROAD.git
+if [[ "$NEED_DEPS" == "false" ]]; then
+    print_skip "cmake, g++, git, python3 already available"
+else
+    print_status "Updating package lists (no full upgrade for speed)..."
+    sudo apt update
+    if [[ "$RUN_APT_UPGRADE" == "true" ]]; then
+        print_status "Running apt upgrade (can take a while)..."
+        sudo apt upgrade -y
+    fi
+    # Minimal set; flow's setup.sh installs the rest when we run it
+    print_status "Installing minimal build and runtime deps..."
+    sudo apt install -y \
+        build-essential cmake git python3 python3-pip python3-venv \
+        wget curl \
+        libboost-all-dev libgmp-dev libmpfr-dev libmpc-dev \
+        libffi-dev libreadline-dev libsqlite3-dev libbz2-dev \
+        libncurses-dev libssl-dev liblzma-dev zlib1g-dev
 fi
 
-cd OpenROAD
-print_status "Installing OpenROAD dependencies..."
-sudo ./etc/DependencyInstaller.sh -all
+# =============================================================================
+# Step 2: OpenROAD-flow-scripts (builds OpenROAD + Yosys once — no separate OpenROAD build)
+# =============================================================================
+print_header "Step 2: OpenROAD-flow-scripts (OpenROAD + Yosys)"
 
-# Use official Build.sh (reads deps from etc/openroad_deps_prefixes.txt); then install to /usr/local
-print_status "Building OpenROAD (this will take 30-60 minutes)..."
-./etc/Build.sh
-sudo cmake --build build --target install
-cd ..
-
-print_header "Step 3: Installing OpenROAD-flow-scripts"
-
-# Remove existing /opt/or-tools if present (owned by root). Upstream flow scripts
-# may try to rm it as the current user and fail with "Permission denied".
-if [[ -d /opt/or-tools ]]; then
-    print_status "Removing existing /opt/or-tools (requires sudo)..."
-    sudo rm -rf /opt/or-tools
+FLOW_DIR="$(get_flow_dir)"
+if has_openroad && has_yosys; then
+    print_skip "OpenROAD and Yosys already on PATH"
+    need_flow_build=false
+elif [[ -d "$FLOW_DIR" ]] && [[ -f "$FLOW_DIR/env.sh" ]]; then
+    # shellcheck source=/dev/null
+    if ( source "$FLOW_DIR/env.sh" 2>/dev/null && has_openroad && has_yosys ); then
+        print_skip "OpenROAD-flow-scripts already built and working"
+        need_flow_build=false
+    else
+        print_status "Flow dir exists but build may be incomplete; rebuilding..."
+        need_flow_build=true
+    fi
+else
+    need_flow_build=true
 fi
 
-# Install OpenROAD-flow-scripts
-if [[ ! -d "openroad-flow-scripts" ]]; then
-    print_status "Cloning OpenROAD-flow-scripts..."
-    git clone --recursive https://github.com/The-OpenROAD-Project/openroad-flow-scripts.git
+# Always ensure the flow repo is present (clone if missing) so the user has designs/Makefile even when we skip the build
+if [[ ! -d "$INSTALL_DIR/openroad-flow-scripts" ]]; then
+    print_status "Cloning openroad-flow-scripts (flow repo with designs, Makefile, etc.)..."
+    if ! bash -c "git clone --recursive https://github.com/The-OpenROAD-Project/openroad-flow-scripts.git > \"$INSTALL_DIR/openroad-clone.log\" 2>&1"; then
+        print_error "Clone failed. Last 20 lines of log:"
+        tail -20 "$INSTALL_DIR/openroad-clone.log" 2>/dev/null || true
+        exit 1
+    fi
+    print_status "Cloning openroad-flow-scripts done."
+elif [[ "$need_flow_build" == "false" ]]; then
+    print_status "Flow repo already present: $INSTALL_DIR/openroad-flow-scripts"
 fi
 
-cd openroad-flow-scripts
-# Flow’s setup.sh installs deps; may overlap with DependencyInstaller but ensures flow-specific deps
-if [[ -f ./setup.sh ]]; then
-    print_status "Running openroad-flow-scripts setup.sh..."
-    sudo ./setup.sh
+if [[ -n "$need_flow_build" ]]; then
+    if [[ -d /opt/or-tools ]]; then
+        print_status "Removing existing /opt/or-tools (may need sudo)..."
+        sudo rm -rf /opt/or-tools 2>/dev/null || true
+    fi
+
+    cd openroad-flow-scripts
+    if [[ -f ./setup.sh ]]; then
+        print_status "Running flow setup.sh (installs any missing deps)..."
+        sudo ./setup.sh
+        print_status "Flow setup.sh done."
+    fi
+
+    # If system Yosys >= 0.58, build only OpenROAD and use system Yosys (saves 10–30 min)
+    USE_SYSTEM_YOSYS=false
+    if has_yosys && yosys_version_ok; then
+        YVER=$(get_yosys_version)
+        print_status "Using system Yosys ($YVER >= 0.58); building only OpenROAD (skipping Yosys build)."
+        USE_SYSTEM_YOSYS=true
+    fi
+
+    if [[ "$USE_SYSTEM_YOSYS" == "true" ]]; then
+        print_status "Initializing submodules (OpenROAD, etc.)..."
+        git submodule update --init --recursive
+        print_status "Git submodules done."
+        print_status "Building OpenROAD only (~20–45 min)..."
+        print_status "  (output logged to openroad-flow-scripts/build_openroad.log)"
+        BUILD_LOG="build_openroad.log"
+        (
+            if [[ -f dev_env.sh ]]; then
+                # shellcheck source=/dev/null
+                source dev_env.sh
+            fi
+            PROC=$(nproc --all 2>/dev/null || echo 2)
+            INSTALL_PATH="$(pwd)/tools/install"
+            mkdir -p "$INSTALL_PATH"
+            ./tools/OpenROAD/etc/Build.sh -dir="$(pwd)/tools/OpenROAD/build" -threads="$PROC" -cmake="-D CMAKE_INSTALL_PREFIX=${INSTALL_PATH}/OpenROAD"
+            cmake --build tools/OpenROAD/build --target install -j "$PROC"
+        ) >> "$BUILD_LOG" 2>&1
+        BUILD_EXIT=$?
+        if [[ $BUILD_EXIT -eq 0 ]]; then
+            print_status "Building OpenROAD only done."
+            touch .used_system_yosys 2>/dev/null || true
+        else
+            print_error "Build failed. Last 30 lines of $BUILD_LOG:"
+            tail -30 "$BUILD_LOG" 2>/dev/null || true
+            exit 1
+        fi
+    else
+        print_status "Building OpenROAD + Yosys (single build, ~30–60 min)..."
+        print_status "  (output logged to openroad-flow-scripts/build_openroad.log)"
+        if ./build_openroad.sh --local >> build_openroad.log 2>&1; then
+            print_status "Building OpenROAD + Yosys done."
+        else
+            print_error "Build failed. Last 30 lines of build_openroad.log:"
+            tail -30 build_openroad.log 2>/dev/null || true
+            exit 1
+        fi
+    fi
+    cd "$INSTALL_DIR"
 fi
-print_status "Building OpenROAD-flow-scripts (OpenROAD, Yosys, etc.)..."
-./build_openroad.sh --local
-cd ..
 
-print_header "Step 4: Installing OpenRAM (with virtual environment)"
+# =============================================================================
+# Step 3: OpenRAM (optional; skip test by default to save ~25 min)
+# =============================================================================
+print_header "Step 3: OpenRAM"
 
-# Remove any previous OpenRAM installation in install directory
-cd "$INSTALL_DIR"
-rm -rf OpenRAM
+if has_openram; then
+    print_skip "OpenRAM already available"
+else
+    if [[ ! -d "$INSTALL_DIR/OpenRAM" ]]; then
+        cd "$INSTALL_DIR"
+        rm -rf OpenRAM 2>/dev/null || true
+        print_status "Cloning OpenRAM..."
+        git clone https://github.com/VLSIDA/OpenRAM.git
+        print_status "Cloning OpenRAM done."
+    fi
 
-# Clone OpenRAM into INSTALL_DIR
-print_status "Cloning OpenRAM..."
-git clone https://github.com/VLSIDA/OpenRAM.git
-cd OpenRAM
+    cd "$INSTALL_DIR/OpenRAM"
+    if ! grep -q "lef_rom_interconnect" technology/freepdk45/tech/tech.py 2>/dev/null; then
+        print_status "Patching freepdk45 tech (lef_rom_interconnect)..."
+        sed -i '/^m3_stack = ("m3", "via3", "m4")$/a lef_rom_interconnect = ["m1", "m2", "m3", "m4"]' technology/freepdk45/tech/tech.py
+    fi
 
-# freepdk45 does not define lef_rom_interconnect; rom_bank (loaded by modules) requires it. Add a stub.
-if ! grep -q "lef_rom_interconnect" technology/freepdk45/tech/tech.py 2>/dev/null; then
-    print_status "Adding lef_rom_interconnect to freepdk45 tech (required by rom_bank)..."
-    sed -i '/^m3_stack = ("m3", "via3", "m4")$/a lef_rom_interconnect = ["m1", "m2", "m3", "m4"]' technology/freepdk45/tech/tech.py
+    # OpenRAM needs build-essential, python3-venv; we already did minimal deps
+    if ! command -v klayout &>/dev/null; then
+        print_status "Installing klayout for OpenRAM..."
+        sudo apt install -y klayout 2>/dev/null || true
+    fi
+
+    if [[ ! -d "openram_env" ]]; then
+        print_status "Creating OpenRAM virtual environment..."
+        python3 -m venv openram_env
+        # shellcheck source=/dev/null
+        source openram_env/bin/activate
+        pip install -q "numpy>=1.17.4,<2" matplotlib scipy scikit-learn
+        print_status "OpenRAM venv and Python deps done."
+        deactivate 2>/dev/null || true
+    fi
+
+    if [[ "$SKIP_OPENRAM_TEST" != "true" ]]; then
+        print_status "Running OpenRAM example (can take 25+ min)..."
+        # shellcheck source=/dev/null
+        source openram_env/bin/activate
+        if python3 sram_compiler.py macros/sram_configs/example_config_freepdk45.py >> "$INSTALL_DIR/OpenRAM/openram-test.log" 2>&1; then
+            print_status "OpenRAM example compile done."
+        else
+            print_error "OpenRAM example failed. Last 20 lines of log:"
+            tail -20 "$INSTALL_DIR/OpenRAM/openram-test.log" 2>/dev/null || true
+        fi
+        deactivate 2>/dev/null || true
+    else
+        print_status "Skipping OpenRAM test (use --test-openram to run it)."
+    fi
+    cd "$INSTALL_DIR"
 fi
 
-# OPENRAM_HOME must be the compiler/ subdir: common.py loads the package from OPENRAM_HOME/../__init__.py
-export OPENRAM_HOME="$INSTALL_DIR/OpenRAM/compiler"
-export OPENRAM_TECH="$INSTALL_DIR/OpenRAM/technology"
-export PYTHONPATH="$OPENRAM_HOME"
+# =============================================================================
+# Step 4: Environment script (source flow's env.sh so openroad + yosys on PATH)
+# =============================================================================
+print_header "Step 4: Environment script"
 
-# Install system dependencies
-print_status "Installing system dependencies for OpenRAM..."
-sudo apt update
-sudo apt install -y build-essential python3-dev python3-pip python3-venv klayout
-
-# Set up Python virtual environment
-print_status "Setting up Python virtual environment for OpenRAM..."
-python3 -m venv openram_env
-source openram_env/bin/activate
-
-# Install Python dependencies (pin numpy<2: OpenRAM's vector/float() fails with numpy 2.x)
-print_status "Installing Python dependencies in virtual environment..."
-pip install "numpy>=1.17.4,<2" matplotlib scipy scikit-learn
-
-# Run a test compile with example config
-print_status "Running OpenRAM with example config to verify installation..."
-python3 sram_compiler.py macros/sram_configs/example_config_freepdk45.py
-
-# Deactivate virtual environment
-deactivate
-
-cd "$INSTALL_DIR"
-
-print_header "Step 5: Creating Environment Scripts"
-
-# Create environment setup script
-cat > setup_environment.sh << 'EOF'
+cat > "$INSTALL_DIR/setup_environment.sh" << EOF
 #!/bin/bash
-# Environment setup script for OpenROAD + OpenRAM
+# OpenROAD + OpenRAM environment (minimal)
+# Source this before using openroad, yosys, or the flow.
 
-export OPENROAD_HOME="$HOME/openroad-setup/OpenROAD"
-export OPENROAD_FLOW_HOME="$HOME/openroad-setup/openroad-flow-scripts"
-export OPENRAM_ROOT="$HOME/openroad-setup/OpenRAM"
-# OPENRAM_HOME must be compiler/ so common.py finds OPENRAM_HOME/../__init__.py
-export OPENRAM_HOME="$OPENRAM_ROOT/compiler"
-export OPENRAM_TECH="$OPENRAM_ROOT/technology"
-export PYTHONPATH="$OPENRAM_HOME"
+export OPENROAD_FLOW_HOME="\${OPENROAD_FLOW_HOME:-$INSTALL_DIR/openroad-flow-scripts}"
+export OPENRAM_ROOT="\${OPENRAM_ROOT:-$INSTALL_DIR/OpenRAM}"
+export OPENRAM_HOME="\$OPENRAM_ROOT/compiler"
+export OPENRAM_TECH="\$OPENRAM_ROOT/technology"
+export PYTHONPATH="\$OPENRAM_HOME"
 
-# Add OpenROAD to PATH (Build.sh puts binary in build/bin)
-export PATH="$OPENROAD_HOME/build/bin:$PATH"
+# OpenROAD: use flow's built binary
+if [[ -x "\$OPENROAD_FLOW_HOME/tools/install/OpenROAD/bin/openroad" ]]; then
+    export OPENROAD_EXE="\$OPENROAD_FLOW_HOME/tools/install/OpenROAD/bin/openroad"
+    export PATH="\$OPENROAD_FLOW_HOME/tools/install/OpenROAD/bin:\$PATH"
+    # Flow's Yosys (if built) so yosys is on PATH after a full build
+    if [[ -d "\$OPENROAD_FLOW_HOME/tools/install/yosys/bin" ]]; then
+        export PATH="\$OPENROAD_FLOW_HOME/tools/install/yosys/bin:\$PATH"
+    fi
+fi
 
-# Add OpenROAD-flow-scripts to PATH
-export PATH="$OPENROAD_FLOW_HOME/flow:$PATH"
+# Yosys: use system Yosys if available (flow Makefile uses YOSYS_EXE when set)
+if command -v yosys &>/dev/null; then
+    export YOSYS_EXE="\$(command -v yosys)"
+fi
 
-echo "OpenROAD + OpenRAM environment ready!"
-echo "OpenROAD: $OPENROAD_HOME"
-echo "OpenROAD-flow-scripts: $OPENROAD_FLOW_HOME"
-echo "OpenRAM: $OPENRAM_ROOT"
+# If flow's env.sh exists and OpenROAD wasn't found above, source it
+if [[ -z "\${OPENROAD_EXE+x}" ]] && [[ -f "\$OPENROAD_FLOW_HOME/env.sh" ]]; then
+    source "\$OPENROAD_FLOW_HOME/env.sh"
+fi
+
+# Flow's flow/ directory on PATH for 'make'
+if [[ -d "\$OPENROAD_FLOW_HOME/flow" ]]; then
+    export PATH="\$OPENROAD_FLOW_HOME/flow:\$PATH"
+fi
+
+echo "OpenROAD + OpenRAM environment ready."
+echo "  OpenROAD-flow-scripts: \$OPENROAD_FLOW_HOME"
+echo "  OpenRAM:               \$OPENRAM_ROOT"
+echo "  Use: source $INSTALL_DIR/openram_env/bin/activate  (in OpenRAM dir) for OpenRAM Python."
 EOF
+chmod +x "$INSTALL_DIR/setup_environment.sh"
 
-chmod +x setup_environment.sh
-
-# Create tmux helper
-cat > run_openram.sh << 'EOF'
+# OpenRAM tmux helper (use \$ so the script gets literal $1 when run)
+cat > "$INSTALL_DIR/run_openram.sh" << 'RUNEOF'
 #!/bin/bash
-# Helper script to run OpenRAM in tmux
-
-if [ $# -eq 0 ]; then
+if [[ $# -eq 0 ]]; then
     echo "Usage: $0 <config_file.py>"
-    echo ""
-    echo "Example:"
-    echo "  $0 my_sram_config.py"
-    echo ""
-    echo "This will run OpenRAM in a tmux session that persists even if you disconnect."
+    echo "Example: $0 my_sram_config.py"
     exit 1
 fi
-
-CONFIG_FILE=$1
-SESSION_NAME="openram_$(basename $CONFIG_FILE .py)"
-
-# Setup environment (find setup_environment.sh next to this script)
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/setup_environment.sh"
-
-# Create new tmux session
+SESSION_NAME="openram_$(basename "$1" .py)"
 tmux new-session -d -s "$SESSION_NAME"
-
-# Run OpenRAM in tmux: source env, cd to OpenRAM root, activate venv if present, run compiler
 tmux send-keys -t "$SESSION_NAME" "source $SCRIPT_DIR/setup_environment.sh" Enter
-tmux send-keys -t "$SESSION_NAME" "cd \$OPENRAM_ROOT" Enter
-tmux send-keys -t "$SESSION_NAME" "if [ -f openram_env/bin/activate ]; then source openram_env/bin/activate; fi" Enter
-tmux send-keys -t "$SESSION_NAME" "python3 sram_compiler.py $CONFIG_FILE" Enter
+tmux send-keys -t "$SESSION_NAME" "cd \$OPENRAM_ROOT && source openram_env/bin/activate && python3 sram_compiler.py $1" Enter
+echo "OpenRAM started. Attach: tmux attach-session -t $SESSION_NAME"
+RUNEOF
+chmod +x "$INSTALL_DIR/run_openram.sh"
 
-echo "OpenRAM started in tmux session: $SESSION_NAME"
-echo ""
-echo "Commands:"
-echo "  Attach to session:    tmux attach-session -t $SESSION_NAME"
-echo "  Detach from session:  Ctrl+B, then D"
-echo "  List all sessions:    tmux list-sessions"
-echo "  Kill session:         tmux kill-session -t $SESSION_NAME"
-EOF
+# =============================================================================
+# Done
+# =============================================================================
+print_header "Setup complete"
 
-chmod +x run_openram.sh
-
-print_header "Step 6: Creating README"
-
-# Create README
-cat > README.md << 'EOF'
-# OpenROAD + OpenRAM Linux Setup
-
-One-command setup for OpenROAD, OpenROAD-flow-scripts, and OpenRAM on Linux.
-
-## Quick Start
-
-```bash
-curl -sSL https://raw.githubusercontent.com/yourusername/openroad-openram-setup/main/setup.sh | bash
-```
-
-Or clone and run:
-
-```bash
-git clone https://github.com/yourusername/openroad-openram-setup.git
-cd openroad-openram-setup
-./setup.sh
-```
-
-## What Gets Installed
-
-- **OpenROAD**: Physical design tool
-- **OpenROAD-flow-scripts**: ASIC flow automation
-- **OpenRAM**: Memory generator
-- **All dependencies**: System packages, Python packages, etc.
-
-## Usage
-
-### Setup Environment
-```bash
-source setup_environment.sh
-```
-
-### Generate SRAM
-```bash
-# Create your SRAM config file
-nano my_sram.py
-
-# Run in tmux (recommended for long jobs)
-./run_openram.sh my_sram.py
-
-# Or run directly
-cd OpenRAM
-python3 sram_compiler.py my_sram.py
-```
-
-### Use OpenROAD
-```bash
-# Standalone (after source setup_environment.sh)
-openroad
-
-# For OpenROAD-flow-scripts (e.g. make in flow/), use the flow’s env:
-cd openroad-flow-scripts && source env.sh && cd flow && make
-```
-
-## Installation Directory
-
-Everything is installed in: `$HOME/openroad-setup/`
-
-## Requirements
-
-- Ubuntu 20.04, 22.04, or 24.04 LTS (including 24.04.3) or Debian 11+
-- 8GB+ RAM recommended
-- 20GB+ free disk space
-- Internet connection
-
-## Troubleshooting
-
-### Permission Issues
-```bash
-sudo chown -R $USER:$USER $HOME/openroad-setup
-```
-
-### Python Issues
-```bash
-pip3 install --upgrade pip
-pip3 install -r requirements.txt --break-system-packages
-```
-
-### Memory Issues
-Start with small SRAM configurations first.
-
-## Support
-
-- Check the logs in the respective directories
-- Use tmux for long-running jobs
-- Start with small examples first
-
-## License
-
-MIT License
-EOF
-
-print_header "Setup Complete!"
-
-print_status "Installation directory: $INSTALL_DIR"
+print_status "Everything was installed to: $INSTALL_DIR"
+if [[ "$INSTALL_DIR" != "$RUN_DIR" ]]; then
+    print_status "  (install dir differs from where you ran the script — use: cd $INSTALL_DIR)"
+fi
+print_status ""
+print_status "To see the repos:  cd $INSTALL_DIR && ls"
 print_status ""
 print_status "Next steps:"
-print_status "1. Setup environment: source setup_environment.sh"
-print_status "2. Create a SRAM config file"
-print_status "3. Run OpenRAM: ./run_openram.sh your_config.py"
+if [[ "$INSTALL_DIR" != "$RUN_DIR" ]]; then
+    print_status "  1. cd $INSTALL_DIR"
+else
+    print_status "  1. You are already in the install dir."
+fi
+print_status "  2. source setup_environment.sh"
+print_status "  3. cd \$OPENROAD_FLOW_HOME/flow && make DESIGN_CONFIG=./designs/sky130hd/gcd/config.mk   # quick test"
+print_status "  4. For OpenRAM: cd \$OPENRAM_ROOT && source openram_env/bin/activate && python3 sram_compiler.py <config.py>"
 print_status ""
-print_status "Happy designing!"
+print_status "Optional: add to your shell:  source $INSTALL_DIR/setup_environment.sh"
